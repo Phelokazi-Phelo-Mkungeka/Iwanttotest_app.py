@@ -1,0 +1,2 @@
+pip install streamlit numpy scipy matplotlib
+streamlit run your_script.py
