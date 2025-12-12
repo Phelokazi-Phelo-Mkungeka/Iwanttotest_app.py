@@ -91,14 +91,16 @@ def hour_of(ts) -> int:
     if pd.isna(parsed):
         return fallback_hour
 
-    # If parsed has timezone info, convert
     try:
-        if parsed.tz is not None:
-            # tz-aware Timestamp
+        # Ensure we have a pandas.Timestamp
+        parsed = pd.Timestamp(parsed)
+
+        # If parsed has timezone info, convert
+        if getattr(parsed, "tzinfo", None) is not None:
             try:
                 converted = parsed.tz_convert(tz)
             except Exception:
-                # If tz_convert fails try localizing to UTC then convert
+                # If tz_convert fails, try localizing to UTC then convert
                 try:
                     converted = parsed.tz_localize("UTC").tz_convert(tz)
                 except Exception:
@@ -107,15 +109,12 @@ def hour_of(ts) -> int:
         else:
             # naive -> assume DEFAULT_TZ
             try:
-                # convert to Python datetime then localize
-                py_dt = parsed.to_pydatetime()
-                localized = tz.localize(py_dt)
+                localized = parsed.tz_localize(tz)
                 return int(localized.hour)
             except Exception:
-                # try pandas localization
+                # As a final fallback, return the hour component of the naive timestamp
                 try:
-                    converted = pd.Timestamp(parsed).tz_localize(tz)
-                    return int(converted.hour)
+                    return int(parsed.hour)
                 except Exception:
                     return fallback_hour
     except Exception:
@@ -294,7 +293,7 @@ def compute_metrics(df, morning_start, morning_end, evening_start, evening_end,
     def classify_row(row):
         text = row.get("text", "")
         hashtags = [h.strip().lstrip("#").lower() for h in re.split(r"[,\s]+", str(row.get("hashtags", ""))) if h.strip()]
-        hour = hour_of(row.get("timestamp", pd.Timestamp.now()))
+        hour = hour_of(row.get("timestamp", pd.Timestamp.now(tz=tz)))
         is_taxi = is_taxi_related(text, hashtags, taxi_keywords) or (str(row.get("topic", "")).lower() == "taxi_violence")
         is_mis = bool(row.get("is_misinfo", False)) or is_misinfo(text, misinfo_keywords)
         return hour, is_taxi, is_mis
