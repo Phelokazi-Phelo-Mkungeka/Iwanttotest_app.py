@@ -6,19 +6,57 @@
 # - Applies time-of-day weights to taxi-violence misinformation (morning boost, evening drop).
 # - Interactive controls for time buckets, keyword rules, and scaling factors.
 # - Exports nodes/edges as CSV.
-import streamlit as st
-import pandas as pd
-import numpy as np
 
-import plotly.express as px
+# NOTE: Improved import handling — fail fast with user-friendly message
+import importlib
+import sys
 import re
 from datetime import datetime, time as dtime
-import pytz
+
+import streamlit as st
 from streamlit.components.v1 import html
 
-import networkx as nx
-from pyvis.network import Network
+# Check required third-party packages and show a friendly Streamlit error if any are missing.
+_required_modules = {
+    "pandas": "pandas",
+    "numpy": "numpy",
+    "plotly.express": "plotly",
+    "pytz": "pytz",
+    "networkx": "networkx",
+    "pyvis.network": "pyvis",
+}
 
+_missing_pkgs = []
+_imported = {}
+for mod_name, pkg_name in _required_modules.items():
+    try:
+        _imported[mod_name] = importlib.import_module(mod_name)
+    except Exception:
+        _missing_pkgs.append(pkg_name)
+
+if _missing_pkgs:
+    _uniq = sorted(set(_missing_pkgs))
+    st.set_page_config(
+        page_title="Misinformation Network (Taxi Violence Dynamics)",
+        page_icon="🕸️",
+        layout="wide",
+    )
+    st.error(
+        "Missing required Python packages: "
+        + ", ".join(_uniq)
+        + "\n\nInstall them into the environment running Streamlit, e.g.:\n\n"
+        f"pip install {' '.join(_uniq)}\n\n"
+        "Then restart the Streamlit app."
+    )
+    st.stop()
+
+# Bind imported modules to local names used in the app
+pd = _imported["pandas"]
+np = _imported["numpy"]
+px = _imported["plotly.express"]
+pytz = _imported["pytz"]
+nx = _imported["networkx"]
+Network = _imported["pyvis.network"].Network
 
 # ------------------------------
 # App config
@@ -540,4 +578,4 @@ with col2:
     )
 
 st.caption("Tip: The node color indicates misinfo proportion; red nodes are taxi-related with majority misinfo.")
-
+    
