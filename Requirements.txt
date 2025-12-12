@@ -1,2 +1,15 @@
-pip install streamlit numpy scipy matplotlib
-streamlit run your_script.py
+
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+import networkx as nx
+from pyvis.network import Network
+import plotly.express as px
+import re
+from datetime import datetime, time as dtime
+import pytz
+from io import StringIO
+from streamlit.components.v1 import html
+
+
