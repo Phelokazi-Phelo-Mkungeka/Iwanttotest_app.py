@@ -12,4 +12,5 @@ import pytz
 from io import StringIO
 from streamlit.components.v1 import html
 
+pip install networkx plotly pyvis
 
