@@ -1,0 +1,15 @@
+
+@echo off
+py -3 -m venv .venv || goto :fail
+call .\.venv\Scripts\activate || goto :fail
+python -m pip install --upgrade pip || goto :fail
+python -m pip install -r requirements.txt || goto :fail
+streamlit run app.py
+goto :end
+
+:fail
+echo.
+echo Something failed. Check the output above for the error details.
+pause
+
+:end
