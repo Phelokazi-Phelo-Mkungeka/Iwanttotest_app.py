@@ -1,4 +1,3 @@
-
 # app.py
 # Streamlit app: Misinformation Network with Time-of-Day Taxi Violence Dynamics
 # Author: Phelokazi Mkungeka & M365 Copilot
@@ -50,6 +49,7 @@ def normalize_list_from_textarea(text: str) -> list:
     return sorted({s.strip().lower() for s in raw if s.strip()})
 
 def extract_hashtags(text: str) -> list:
+    """Extract hashtags from text without the leading '#' and lowercased."""
     if not isinstance(text, str):
         return []
     tags = re.findall(r"#(\w+)", text)
@@ -71,15 +71,55 @@ def is_misinfo(text: str, misinfo_keywords: list) -> bool:
     return in_any_keyword(text, misinfo_keywords)
 
 def hour_of(ts) -> int:
+    """
+    Robustly parse timestamp-like input and return hour in DEFAULT_TZ (0-23).
+
+    - If ts is timezone-aware, convert to DEFAULT_TZ.
+    - If ts is naive, assume it is in DEFAULT_TZ (localize).
+    - If parsing fails, fall back to current server hour in DEFAULT_TZ.
+    """
+    # Fallback to current hour
+    fallback_hour = datetime.now(tz).hour
+    if ts is None or (isinstance(ts, float) and np.isnan(ts)):
+        return fallback_hour
     try:
-        return pd.to_datetime(ts).tz_localize(tz=None).tz_localize("UTC").tz_convert(DEFAULT_TZ).hour
+        parsed = pd.to_datetime(ts)
     except Exception:
-        # Try naive parse then localize to DEFAULT_TZ
-        try:
-            return pd.to_datetime(ts).tz_localize(DEFAULT_TZ).hour
-        except Exception:
-            # Fallback: assume already local
-            return pd.to_datetime(ts).hour
+        return fallback_hour
+
+    # If pandas returned NaT
+    if pd.isna(parsed):
+        return fallback_hour
+
+    # If parsed has timezone info, convert
+    try:
+        if parsed.tz is not None:
+            # tz-aware Timestamp
+            try:
+                converted = parsed.tz_convert(tz)
+            except Exception:
+                # If tz_convert fails try localizing to UTC then convert
+                try:
+                    converted = parsed.tz_localize("UTC").tz_convert(tz)
+                except Exception:
+                    return fallback_hour
+            return int(converted.hour)
+        else:
+            # naive -> assume DEFAULT_TZ
+            try:
+                # convert to Python datetime then localize
+                py_dt = parsed.to_pydatetime()
+                localized = tz.localize(py_dt)
+                return int(localized.hour)
+            except Exception:
+                # try pandas localization
+                try:
+                    converted = pd.Timestamp(parsed).tz_localize(tz)
+                    return int(converted.hour)
+                except Exception:
+                    return fallback_hour
+    except Exception:
+        return fallback_hour
 
 def weight_for_post(hour: int, is_taxi: bool, is_mis: bool,
                     morning_start: dtime, morning_end: dtime, morning_boost: float,
@@ -97,19 +137,21 @@ def weight_for_post(hour: int, is_taxi: bool, is_mis: bool,
 def build_items(row, node_mode, topic_keywords):
     """
     Return list of items for nodes:
-    - 'hashtags': from 'hashtags' column or extracted from text.
-    - 'keywords': from topic_keywords found in text.
-    - 'accounts': from 'account' column (or 'account_id').
+    - 'hashtags': from 'hashtags' column or extracted from text (normalized without '#').
+    - 'keywords': from topic_keywords found in text and in hashtags.
+    - 'accounts': from 'account' column (or 'account_id'/'username').
     """
     text = row.get("text", "")
     hashtags_col = row.get("hashtags", None)
     if isinstance(hashtags_col, str) and hashtags_col.strip():
-        hashtags = [h.strip().lower() for h in re.split(r"[,\s]+", hashtags_col) if h.strip()]
+        # Normalize: strip leading '#' and whitespace, lowercase
+        hashtags = [h.strip().lstrip("#").lower() for h in re.split(r"[,\s]+", hashtags_col) if h.strip()]
     else:
         hashtags = extract_hashtags(text)
 
     if node_mode == "hashtags":
-        return hashtags
+        # Return unique sorted list
+        return sorted({h for h in hashtags if h})
 
     if node_mode == "keywords":
         found = []
@@ -133,7 +175,7 @@ def build_items(row, node_mode, topic_keywords):
 def add_cooccurrence_edges(G: nx.Graph, items: list, w: float):
     """Add edges for all unique pairs within items with weight accumulation."""
     if len(items) < 2:
-        # Add single node with weight on degree proxy via self (store as node weight)
+        # Add single node with weight on degree proxy via node attribute (node_weight)
         for it in items:
             G.add_node(it)
             G.nodes[it]["node_weight"] = G.nodes[it].get("node_weight", 0.0) + w
@@ -152,7 +194,8 @@ def add_cooccurrence_edges(G: nx.Graph, items: list, w: float):
 def color_for_node(label: str, node_stats: dict, taxi_keywords: list) -> str:
     info = node_stats.get(label, {"mis_weight": 0.0, "total_weight": 0.0})
     mis_ratio = (info["mis_weight"] / info["total_weight"]) if info["total_weight"] > 0 else 0.0
-    is_taxi_node = any(k in label for k in taxi_keywords)
+    label_clean = label.lstrip("#").lower()
+    is_taxi_node = any(k in label_clean for k in taxi_keywords)
     # Coloring rules:
     # - Red: Taxi-related & majority misinfo
     # - Orange: Majority misinfo
@@ -165,7 +208,13 @@ def color_for_node(label: str, node_stats: dict, taxi_keywords: list) -> str:
 
 def build_pyvis(G: nx.Graph, node_stats: dict, taxi_keywords: list, height="700px", width="100%"):
     net = Network(height=height, width=width, notebook=False, directed=False)
-    net.barnes_hut(gravity=-20000, central_gravity=0.3, spring_length=150, spring_strength=0.03)
+    # Tweak physics parameters but keep safe defaults
+    try:
+        net.barnes_hut(gravity=-20000, central_gravity=0.3, spring_length=150, spring_strength=0.03)
+    except Exception:
+        # If parameters cause issues, fall back to defaults
+        pass
+
     # Scale node sizes
     node_weights = [G.nodes[n].get("node_weight", 0.0) for n in G.nodes()]
     max_node_w = max(node_weights) if node_weights else 1.0
@@ -211,18 +260,24 @@ def generate_sample_data(n=500, seed=42):
     ]
 
     rows = []
-    today = pd.Timestamp.now(tz=DEFAULT_TZ).normalize()
+    today = pd.Timestamp.now(tz=tz).normalize()
     for i in range(n):
         hour = int(base_hours[i])
         ts = today + pd.Timedelta(hours=hour) + pd.Timedelta(minutes=int(rng.integers(0, 60)))
         text = rng.choice(text_templates)
-        # Randomly add hashtags
-        hash_pool = ["#taxi", "#minibus", "#violence", "#HPV", "#vaccine", "#crime", "#education", "#rumor", "#strike"]
-        hashtags = ",".join(sorted(set(rng.choice(hash_pool, size=rng.integers(0, 4), replace=False))))
+        # Randomly add hashtags (normalize to include leading '#' or not; we'll store without '#')
+        hash_pool = ["taxi", "minibus", "violence", "HPV", "vaccine", "crime", "education", "rumor", "strike"]
+        # choose k items (k may be 0)
+        k = int(rng.integers(0, 4))
+        if k > 0:
+            chosen = sorted(set(rng.choice(hash_pool, size=k, replace=False)))
+            hashtags = ",".join(f"#{h}" for h in chosen)
+        else:
+            hashtags = ""
         # Misinfo flag heuristic
-        mis = any(k in text.lower() for k in ["rumor", "unverified", "alleged"])
+        mis = any(kw in text.lower() for kw in ["rumor", "unverified", "alleged"])
         # Taxi-related heuristic
-        taxi = any(k in (text.lower() + " " + hashtags.lower()) for k in ["taxi", "minibus", "route", "violence", "strike"])
+        taxi = any(kw in (text.lower() + " " + hashtags.lower()) for kw in ["taxi", "minibus", "route", "violence", "strike", "rank"])
         rows.append({
             "timestamp": ts.isoformat(),
             "text": text,
@@ -238,7 +293,7 @@ def compute_metrics(df, morning_start, morning_end, evening_start, evening_end,
     # Classify & weight per post
     def classify_row(row):
         text = row.get("text", "")
-        hashtags = [h.strip().lower() for h in re.split(r"[,\s]+", str(row.get("hashtags", ""))) if h.strip()]
+        hashtags = [h.strip().lstrip("#").lower() for h in re.split(r"[,\s]+", str(row.get("hashtags", ""))) if h.strip()]
         hour = hour_of(row.get("timestamp", pd.Timestamp.now()))
         is_taxi = is_taxi_related(text, hashtags, taxi_keywords) or (str(row.get("topic", "")).lower() == "taxi_violence")
         is_mis = bool(row.get("is_misinfo", False)) or is_misinfo(text, misinfo_keywords)
@@ -383,7 +438,7 @@ current_hour_server = datetime.now(tz=tz).hour
 
 for _, row in df2.iterrows():
     text = row.get("text", "")
-    hashtags = [h.strip().lower() for h in re.split(r"[,\s]+", str(row.get("hashtags", ""))) if h.strip()]
+    hashtags = [h.strip().lstrip("#").lower() for h in re.split(r"[,\s]+", str(row.get("hashtags", ""))) if h.strip()]
     is_taxi = bool(row.get("is_taxi", False))
     is_mis = bool(row.get("is_misinfo_final", False))
 
@@ -418,10 +473,30 @@ for _, row in df2.iterrows():
 
 # PyVis network render
 net = build_pyvis(G, node_stats, taxi_keywords, height="700px", width="100%")
-net.show("network.html")
-with open("network.html", "r", encoding="utf-8") as f:
-    html_content = f.read()
-html(html_content, height=720)
+
+# Prefer generating HTML string directly (avoids filesystem and browser calls)
+html_content = ""
+try:
+    # generate_html exists in pyvis; if present it returns rendered HTML as string
+    if hasattr(net, "generate_html"):
+        html_content = net.generate_html()
+    else:
+        # Fallback: write file and read it back
+        net.show("network.html")
+        with open("network.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+except Exception:
+    # Last-resort: try the show() path then read file
+    try:
+        net.show("network.html")
+        with open("network.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+    except Exception as e:
+        st.error(f"Failed to render network visualization: {e}")
+        html_content = "<p>Visualization failed to render.</p>"
+
+if html_content:
+    html(html_content, height=720)
 
 # Export nodes/edges
 nodes_export = []
@@ -465,4 +540,3 @@ with col2:
     )
 
 st.caption("Tip: The node color indicates misinfo proportion; red nodes are taxi-related with majority misinfo.")
-
