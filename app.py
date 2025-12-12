@@ -540,3 +540,4 @@ with col2:
     )
 
 st.caption("Tip: The node color indicates misinfo proportion; red nodes are taxi-related with majority misinfo.")
+
