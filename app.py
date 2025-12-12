@@ -13,7 +13,6 @@ import sys
 import re
 from datetime import datetime, time as dtime
 
-pip install networkx plotly pyvis
 import streamlit as st
 from streamlit.components.v1 import html
 
